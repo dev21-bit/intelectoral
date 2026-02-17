@@ -14,6 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # ---------------------------------------------------
 # ESTILO
 # ---------------------------------------------------
@@ -41,7 +42,29 @@ border-radius:8px;
 
 st.title("Mapa Electoral - Zacatecas")
 
+st.markdown("### Actualización de datos")
 
+col1, col2, col3 = st.columns([1,1,4])
+
+with col1:
+
+    actualizar = st.button(
+        "🔄 Actualizar",
+        use_container_width=True
+    )
+
+
+with col2:
+
+    if actualizar:
+
+        with st.spinner("Actualizando datos..."):
+
+            st.cache_data.clear()
+
+            st.success("Datos actualizados correctamente")
+
+            st.rerun()
 # ---------------------------------------------------
 # BASE DE DATOS
 # ---------------------------------------------------
@@ -109,7 +132,8 @@ def load_excel():
     for _, row in sheet1.iterrows():
 
         sec = row['SECCION']
-        cp = str(row['CP'])
+        cp = str(row['CP']).replace(".0","")
+
         col = row['NOMBRE DE LA COLONIA']
 
         if sec not in data:
@@ -145,6 +169,7 @@ def load_excel():
     return data
 
 
+
 # ---------------------------------------------------
 # RELACION SIMPATIZANTES POR COLONIA EXACTA
 # ---------------------------------------------------
@@ -165,12 +190,7 @@ def get_simpatizantes_colonia():
     SELECT
 
     LPAD(CAST(seccion AS CHAR),4,'0') as seccion,
-
-    domicilio,
-
-    SUBSTRING_INDEX(
-        SUBSTRING_INDEX(domicilio,' ', -3),
-    ' ',1) as cp
+    domicilio
 
     FROM ine
 
@@ -180,8 +200,10 @@ def get_simpatizantes_colonia():
 
     connection.close()
 
-    df['cp'] = df['cp'].astype(str)
     df['seccion'] = df['seccion'].astype(str).str.zfill(4)
+
+    # extraer cp correctamente
+    df["cp"] = df["domicilio"].str.extract(r'(\d{5})(?!.*\d{5})')
 
     colonias_excel = load_excel()
 
@@ -190,51 +212,50 @@ def get_simpatizantes_colonia():
     for _, persona in df.iterrows():
 
         seccion = persona["seccion"]
-        cp = str(persona["cp"]).strip()
-
-        # eliminar todo lo que no sea número
-        cp = ''.join(filter(str.isdigit, cp))
-
         domicilio = str(persona["domicilio"]).upper()
+        cp = str(persona["cp"])
 
         if seccion in colonias_excel:
 
-            colonia_correcta = None
-
             for col in colonias_excel[seccion]:
 
-                nombre = str(col["colonia"]).upper()
+                nombre_col = str(col["colonia"]).upper()
+                cp_col = str(col["cp"]).replace(".0","")
 
-                if col["cp"] == cp and nombre in domicilio:
+                # coincidencia perfecta
+                if cp == cp_col and nombre_col in domicilio:
 
-                    colonia_correcta = col["colonia"]
+                    resultados.append({
+
+                        "seccion": seccion,
+                        "colonia": col["colonia"]
+
+                    })
 
                     break
 
 
-            # si no encontró por nombre, usa CP como fallback
-            if colonia_correcta is None:
+                # si no contiene nombre colonia, asignar por CP
+                elif cp == cp_col:
 
-                for col in colonias_excel[seccion]:
+                    resultados.append({
 
-                    cp_excel = ''.join(filter(str.isdigit, str(col["cp"])))
+                        "seccion": seccion,
+                        "colonia": col["colonia"]
 
-                    if cp_excel == cp:
+                    })
 
-
-                        colonia_correcta = col["colonia"]
-
-                        break
+                    break
 
 
-            if colonia_correcta:
+                    resultados.append({
 
-                resultados.append({
+                        "seccion": seccion,
+                        "colonia": col["colonia"]
 
-                    "seccion": seccion,
-                    "colonia": colonia_correcta
+                    })
 
-                })
+                    break
 
 
     conteo = pd.DataFrame(resultados)
@@ -247,11 +268,11 @@ def get_simpatizantes_colonia():
 
     else:
 
-        conteo = pd.DataFrame(
-            columns=["seccion","colonia","simpatizantes"]
-        )
+        conteo = pd.DataFrame(columns=["seccion","colonia","simpatizantes"])
+
 
     return conteo
+
 
 
 
