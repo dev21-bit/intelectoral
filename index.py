@@ -5,74 +5,50 @@ import json
 from streamlit_folium import folium_static
 import pymysql
 
+# ---------------------------------------------------
+# CONFIG
+# ---------------------------------------------------
+
 st.set_page_config(
-    page_title="Mapa Zacatecas - Electores",
-    page_icon="🗺️",
+    page_title="Mapa Electoral Zacatecas",
     layout="wide"
 )
 
 # ---------------------------------------------------
-# ESTILO VISUAL PERSONALIZADO
+# ESTILO
 # ---------------------------------------------------
+
 st.markdown("""
-    <style>
-        html, body, [class*="css"]  {
-            background-color: white !important;
-        }
+<style>
 
-        h1 {
-            text-align: center;
-            font-weight: 700;
-            color: #650021;
-        }
+html, body, [class*="css"] {
+background-color:white;
+}
 
-        .stTextInput>div>div>input {
-            border: 2px solid #650021;
-            border-radius: 8px;
-        }
+h1 {
+color:#650021;
+text-align:center;
+}
 
-        .stTextInput>label {
-            color: #650021;
-            font-weight: 600;
-        }
+.stTextInput input {
+border:2px solid #650021;
+border-radius:8px;
+}
 
-        .stSubheader {
-            color: #650021;
-        }
-    </style>
+</style>
 """, unsafe_allow_html=True)
+
 
 st.title("Mapa Electoral - Zacatecas")
 
-# ---------------------------------------------------
-# LEER EXCEL
-# ---------------------------------------------------
-@st.cache_data
-def load_excel(path='COLONIAS ZAC.xlsx'):
-    xls = pd.ExcelFile(path)
-    sheet1 = pd.read_excel(xls, xls.sheet_names[0])
-    sheet2 = pd.read_excel(xls, xls.sheet_names[1])
-
-    sheet1['SECCION'] = sheet1['SECCION'].astype(str).str.strip().str.zfill(4)
-    sheet2['Catalogo de Colonias_seccion'] = sheet2['Catalogo de Colonias_seccion'].astype(str).str.strip().str.zfill(4)
-
-    seccion_colonia = {}
-
-    for _, row in sheet1.iterrows():
-        seccion_colonia[row['SECCION']] = row['NOMBRE DE LA COLONIA']
-
-    for _, row in sheet2.iterrows():
-        sec = row['Catalogo de Colonias_seccion']
-        if sec not in seccion_colonia:
-            seccion_colonia[sec] = row['NOMBRE DE LA COLONIA']
-
-    return seccion_colonia
 
 # ---------------------------------------------------
 # BASE DE DATOS
 # ---------------------------------------------------
+
 @st.cache_data
 def get_ine_data():
+
     connection = pymysql.connect(
         host='sql3.freesqldatabase.com',
         user='sql3816861',
@@ -81,123 +57,479 @@ def get_ine_data():
         port=3306
     )
 
-    query = "SELECT seccion, COUNT(*) as total_votantes FROM ine GROUP BY seccion"
+    query = """
+
+    SELECT
+
+    LPAD(CAST(seccion AS CHAR),4,'0') as seccion,
+
+    SUBSTRING_INDEX(
+        SUBSTRING_INDEX(domicilio,' ', -3),
+    ' ',1) as cp,
+
+    COUNT(*) as simpatizantes
+
+    FROM ine
+
+    GROUP BY seccion, cp
+
+    """
+
     df = pd.read_sql(query, connection)
+
     connection.close()
 
-    df['seccion'] = df['seccion'].astype(str).str.strip().str.zfill(4)
+    df['cp'] = df['cp'].astype(str)
+
+    df['seccion'] = df['seccion'].astype(str).str.zfill(4)
+
     return df
+
+
+
+
+
+# ---------------------------------------------------
+# EXCEL COLONIAS
+# ---------------------------------------------------
+
+@st.cache_data
+def load_excel():
+
+    xls = pd.ExcelFile("COLONIAS ZAC.xlsx")
+
+    sheet1 = pd.read_excel(xls, xls.sheet_names[0])
+    sheet2 = pd.read_excel(xls, xls.sheet_names[1])
+
+    data = {}
+
+    sheet1['SECCION'] = sheet1['SECCION'].astype(str).str.zfill(4)
+    sheet2['Catalogo de Colonias_seccion'] = sheet2['Catalogo de Colonias_seccion'].astype(str).str.zfill(4)
+
+    for _, row in sheet1.iterrows():
+
+        sec = row['SECCION']
+        cp = str(row['CP'])
+        col = row['NOMBRE DE LA COLONIA']
+
+        if sec not in data:
+
+            data[sec] = []
+
+        data[sec].append({
+
+            "colonia": col,
+            "cp": cp
+
+        })
+
+
+    for _, row in sheet2.iterrows():
+
+        sec = row['Catalogo de Colonias_seccion']
+        cp = str(row['CP'])
+        col = row['NOMBRE DE LA COLONIA']
+
+        if sec not in data:
+
+            data[sec] = []
+
+        data[sec].append({
+
+            "colonia": col,
+            "cp": cp
+
+        })
+
+
+    return data
+
+
+# ---------------------------------------------------
+# RELACION SIMPATIZANTES POR COLONIA EXACTA
+# ---------------------------------------------------
+
+@st.cache_data
+def get_simpatizantes_colonia():
+
+    connection = pymysql.connect(
+        host='sql3.freesqldatabase.com',
+        user='sql3816861',
+        password='Xvkw87Sknd',
+        database='sql3816861',
+        port=3306
+    )
+
+    query = """
+
+    SELECT
+
+    LPAD(CAST(seccion AS CHAR),4,'0') as seccion,
+
+    domicilio,
+
+    SUBSTRING_INDEX(
+        SUBSTRING_INDEX(domicilio,' ', -3),
+    ' ',1) as cp
+
+    FROM ine
+
+    """
+
+    df = pd.read_sql(query, connection)
+
+    connection.close()
+
+    df['cp'] = df['cp'].astype(str)
+    df['seccion'] = df['seccion'].astype(str).str.zfill(4)
+
+    colonias_excel = load_excel()
+
+    resultados = []
+
+    for _, persona in df.iterrows():
+
+        seccion = persona["seccion"]
+        cp = str(persona["cp"]).strip()
+
+        # eliminar todo lo que no sea número
+        cp = ''.join(filter(str.isdigit, cp))
+
+        domicilio = str(persona["domicilio"]).upper()
+
+        if seccion in colonias_excel:
+
+            colonia_correcta = None
+
+            for col in colonias_excel[seccion]:
+
+                nombre = str(col["colonia"]).upper()
+
+                if col["cp"] == cp and nombre in domicilio:
+
+                    colonia_correcta = col["colonia"]
+
+                    break
+
+
+            # si no encontró por nombre, usa CP como fallback
+            if colonia_correcta is None:
+
+                for col in colonias_excel[seccion]:
+
+                    cp_excel = ''.join(filter(str.isdigit, str(col["cp"])))
+
+                    if cp_excel == cp:
+
+
+                        colonia_correcta = col["colonia"]
+
+                        break
+
+
+            if colonia_correcta:
+
+                resultados.append({
+
+                    "seccion": seccion,
+                    "colonia": colonia_correcta
+
+                })
+
+
+    conteo = pd.DataFrame(resultados)
+
+    if len(conteo) > 0:
+
+        conteo = conteo.groupby(
+            ["seccion","colonia"]
+        ).size().reset_index(name="simpatizantes")
+
+    else:
+
+        conteo = pd.DataFrame(
+            columns=["seccion","colonia","simpatizantes"]
+        )
+
+    return conteo
+
+
 
 # ---------------------------------------------------
 # GEOJSON
 # ---------------------------------------------------
+
 @st.cache_data
-def load_geojson(path='zacatecas_capital_secciones.geojson'):
-    with open(path) as f:
-        geojson_data = json.load(f)
+def load_geojson():
 
-    for feature in geojson_data['features']:
-        feature['properties']['seccion'] = str(
-            feature['properties']['seccion']
-        ).strip().zfill(4)
+    with open("zacatecas_capital_secciones.geojson", encoding="utf-8") as f:
 
-    return geojson_data['features']
+        geo = json.load(f)
+
+
+    for feature in geo["features"]:
+
+        if "SECCION" in feature["properties"]:
+
+            feature["properties"]["seccion"] = str(
+                feature["properties"]["SECCION"]
+            ).zfill(4)
+
+        else:
+
+            feature["properties"]["seccion"] = str(
+                feature["properties"]["seccion"]
+            ).zfill(4)
+
+
+    return geo["features"]
+
+
+
+# ---------------------------------------------------
+# CREAR MAPA
+# ---------------------------------------------------
+
+def crear_mapa(features, colonias, db, filtro):
+
+    centro=[22.7709,-102.5832]
+    zoom=13
+
+    m=folium.Map(
+        location=centro,
+        zoom_start=zoom,
+        tiles="OpenStreetMap"
+    )
+
+    # agrupar
+    secciones = {}
+
+    for feature in features:
+
+        sec = feature["properties"]["seccion"]
+
+        if sec not in secciones:
+            secciones[sec] = []
+
+        secciones[sec].append(feature)
+
+
+    # recorrer secciones
+    for seccion, lista_poligonos in secciones.items():
+
+        if filtro and seccion != filtro:
+            continue
+
+
+        datos=db[db.seccion==seccion]
+
+        total=datos.simpatizantes.sum()
+
+
+        cps=datos.cp.dropna().unique()
+
+        cp_html="<br>".join(cps)
+
+
+        cols=colonias.get(seccion,[])
+
+        colonias_html="<br>".join(
+            f"{c['colonia']} (CP {c['cp']})"
+            for c in cols
+        )
+
+
+        # SIMPATIZANTES POR COLONIA
+
+        detalle = simpatizantes_colonia[
+            simpatizantes_colonia.seccion == seccion
+        ]
+
+        detalle_html=""
+
+        for _, row in detalle.iterrows():
+
+            if pd.notna(row["colonia"]):
+
+                detalle_html += f"""
+                {row['colonia']} — {row['simpatizantes']}<br>
+                """
+
+
+        popup=f"""
+
+        <b>Sección:</b> {seccion}
+
+        <br><br>
+
+        <b>CP registrados:</b><br>
+
+        {cp_html}
+
+        <br><br>
+
+        <b>Colonias:</b><br>
+
+        {colonias_html}
+
+        <br><br>
+
+        <b>Simpatizantes totales:</b>
+
+        {total}
+
+        <br><br>
+
+        <b>Simpatizantes por colonia:</b><br>
+
+        {detalle_html}
+
+        """
+
+
+        # color
+
+        if total==0:
+            color="#ffffff"
+
+        elif total<=2:
+            color="#d4a5b5"
+
+        elif total<=5:
+            color="#a03a5a"
+
+        else:
+            color="#650021"
+
+
+
+        # dibujar
+
+        for feature in lista_poligonos:
+
+            folium.GeoJson(
+
+                feature,
+
+                style_function=lambda x,color=color:{
+
+                    "fillColor":color,
+                    "color":"#650021",
+                    "weight":2,
+                    "fillOpacity":0.4
+
+                },
+
+                tooltip=folium.Tooltip(
+
+                    f"""
+                    Sección: {seccion}
+                    <br>
+                    Simpatizantes: {total}
+                    """
+
+                ),
+
+                popup=folium.Popup(popup,max_width=350)
+
+            ).add_to(m)
+
+
+
+        # marcador
+
+        coords = lista_poligonos[0]["geometry"]["coordinates"][0]
+
+        lat=sum(p[1] for p in coords)/len(coords)
+        lon=sum(p[0] for p in coords)/len(coords)
+
+        if total>0:
+
+            folium.Marker(
+
+                [lat,lon],
+
+                icon=folium.DivIcon(
+
+                    html=f"""
+
+                    <div style="
+                    background:#650021;
+                    color:white;
+                    padding:6px;
+                    border-radius:6px;
+                    font-weight:bold;
+                    ">
+
+                    {total}
+
+                    </div>
+
+                    """
+
+                )
+
+            ).add_to(m)
+
+
+
+    return m
+
+
+
+
+
+# ---------------------------------------------------
+# CARGA
+# ---------------------------------------------------
+
+db = get_ine_data()
+
+colonias = load_excel()
+
+geo = load_geojson()
+
+simpatizantes_colonia = get_simpatizantes_colonia()
+
+
+# ---------------------------------------------------
+# BUSCADOR
+# ---------------------------------------------------
+
+st.subheader("Buscar Seccion")
+
+filtro=st.text_input("Escribe seccion")
+
+if filtro:
+
+    filtro=filtro.zfill(4)
+
+else:
+
+    filtro=None
+
 
 # ---------------------------------------------------
 # MAPA
 # ---------------------------------------------------
-def create_map(features, seccion_colonia, db_data, filtro_seccion=None):
 
-    db_dict = {row['seccion']: row['total_votantes'] for _, row in db_data.iterrows()}
+mapa=crear_mapa(
 
-    m = folium.Map(
-        location=[22.7709, -102.5832],
-        zoom_start=13,
-        tiles=None
-    )
+geo,
+colonias,
+db,
+filtro
 
-    # Vialidad
-    folium.TileLayer(
-        tiles="OpenStreetMap",
-        name="🛣️ Vialidad",
-        control=True
-    ).add_to(m)
+)
 
-    # Satélite
-    folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri",
-        name="🛰️ Satélite",
-        control=True
-    ).add_to(m)
 
-    # DIBUJAR SECCIONES
-    for feature in features:
-        seccion = feature['properties']['seccion']
+folium_static(mapa,width=1600,height=800)
 
-        if filtro_seccion and seccion != filtro_seccion:
-            continue
-
-        colonia = seccion_colonia.get(seccion, "Sin nombre")
-        total = db_dict.get(seccion, 0)
-
-        popup_text = f"""
-        <div style="font-size:14px">
-        <b>Sección:</b> {seccion}<br>
-        <b>Colonia:</b> {colonia}<br>
-        <b>Total electores:</b> {total}
-        </div>
-        """
-
-        if total == 0:
-            fill_color = "#f5f5f5"
-        elif total <= 2:
-            fill_color = "#d4a5b5"
-        elif total <= 5:
-            fill_color = "#a03a5a"
-        else:
-            fill_color = "#650021"
-
-        folium.GeoJson(
-            feature,
-            control=False,
-            style_function=lambda f, fill_color=fill_color: {
-                'fillColor': fill_color,
-                'color': '#650021',
-                'weight': 1.5,
-                'fillOpacity': 0.3
-            },
-            highlight_function=lambda f: {
-                'weight': 3,
-                'color': '#650021'
-            },
-            popup=folium.Popup(popup_text, max_width=300)
-        ).add_to(m)
-
-    folium.LayerControl(collapsed=False).add_to(m)
-
-    return m
 
 # ---------------------------------------------------
-# EJECUCIÓN
+# DEBUG OPCIONAL
 # ---------------------------------------------------
-seccion_colonia = load_excel()
-geo_features = load_geojson()
-db_data = get_ine_data()
 
-st.subheader("Buscar sección")
+st.subheader("Datos INE")
 
-filtro = st.text_input("Escribe la sección que deseas filtrar").strip()
-
-if filtro != "":
-    filtro = filtro.zfill(4)
-else:
-    filtro = None
-
-if geo_features and seccion_colonia:
-    mapa = create_map(geo_features, seccion_colonia, db_data, filtro)
-    folium_static(mapa, width=1600, height=750)
-else:
-    st.error("No se pudieron cargar los datos.")
-
-st.subheader("🗺️ Mapa de Zacatecas - Colonias y Electores")
+st.dataframe(db)
