@@ -74,12 +74,11 @@ def get_ine_data():
 
     connection = pymysql.connect(
         host='sql3.freesqldatabase.com',
-        user='sql3816861',
-        password='Xvkw87Sknd',
-        database='sql3816861',
+        user='sql3817481',
+        password='398j6uKWle',
+        database='sql3817481',
         port=3306
     )
-
     query = """
 
     SELECT
