@@ -202,7 +202,7 @@ with col_title:
     st.markdown("<p style='text-align: center; color: #666;'>Sistema de Visualización de Datos Electorales</p>", unsafe_allow_html=True)
 
 with col_user:
-    if st.button("🚪 Salir", use_container_width=True):
+    if st.button("Salir", use_container_width=True):
         st.session_state.logged_in = False
         st.query_params.clear()
         st.rerun()
@@ -219,7 +219,7 @@ if "ultima_actualizacion" not in st.session_state:
 # ACTUALIZACIÓN DE DATOS MEJORADA
 # ---------------------------------------------------
 with st.container():
-    st.markdown("### 📊 Panel de Control")
+    st.markdown("### Panel de Control")
     
     col1, col2, col3, col4 = st.columns([1,1,2,2])
     
