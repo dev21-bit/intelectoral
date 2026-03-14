@@ -11,6 +11,8 @@ from datetime import datetime
 import numpy as np
 from scipy import stats
 import warnings
+import openpyxl
+from openpyxl import load_workbook
 warnings.filterwarnings('ignore')
 
 # ---------------------------------------------------
@@ -229,6 +231,55 @@ st.markdown("""
     .animate-slide {
         animation: slideIn 0.5s ease-out;
     }
+    
+    /* ESTILOS PARA TARJETAS DE OPERADOR */
+    .operator-card {
+        background: white;
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border-left: 4px solid #667eea;
+        transition: all 0.3s ease;
+    }
+    
+    .operator-card:hover {
+        transform: translateX(5px);
+        box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+    }
+    
+    .operator-name {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: #1e293b;
+        margin-bottom: 0.5rem;
+    }
+    
+    .operator-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+    
+    .stat-item {
+        text-align: center;
+        padding: 0.5rem;
+        background: #f8fafc;
+        border-radius: 12px;
+    }
+    
+    .stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #667eea;
+    }
+    
+    .stat-label {
+        font-size: 0.8rem;
+        color: #64748b;
+        text-transform: uppercase;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -332,27 +383,80 @@ class DataManager:
 
     @staticmethod
     @st.cache_data(ttl=3600)
-    def load_datos_seccion():
+    def load_datos_seccion_con_colores():
+        """
+        Carga los datos de sección incluyendo los colores de las celdas
+        """
         try:
-            df = pd.read_excel("DATOS_POR_SECCION.xlsx", header=None)
-            header_row = 0
-            for i, row in df.iterrows():
-                if any(str(v).strip().upper() in ["SECCIÓN", "SECCION"] for v in row.values):
-                    header_row = i
-                    break
+            # Cargar el workbook con openpyxl para acceder a los colores
+            wb = load_workbook("DATOS_POR_SECCION.xlsx", data_only=True)
+            ws = wb.active
             
-            df = pd.read_excel("DATOS_POR_SECCION.xlsx", header=header_row)
+            # Encontrar la fila de encabezados
+            header_row = 1
+            for row in ws.iter_rows(min_row=1, max_row=10):
+                for cell in row:
+                    if cell.value and str(cell.value).strip().upper() in ["SECCIÓN", "SECCION"]:
+                        header_row = cell.row
+                        break
+            
+            # Extraer datos con pandas primero
+            df = pd.read_excel("DATOS_POR_SECCION.xlsx", header=header_row-1)
             df.columns = [str(c).strip().upper().replace("Ó", "O").replace("Á","A").replace("É","E") for c in df.columns]
             df = df.loc[:, ~df.columns.str.startswith("UNNAMED")]
-            df.columns = ["seccion", "participacion", "inicial", "meta"]
+            
+            # Renombrar columnas esperadas
+            column_mapping = {}
+            for col in df.columns:
+                if "SECCION" in col:
+                    column_mapping[col] = "seccion"
+                elif "PARTICIPACION" in col:
+                    column_mapping[col] = "participacion"
+                elif "INICIAL" in col:
+                    column_mapping[col] = "inicial"
+                elif "META" in col:
+                    column_mapping[col] = "meta"
+            
+            df = df.rename(columns=column_mapping)
+            
+            # Extraer colores de la columna SECCION
+            colores_seccion = {}
+            seccion_col_idx = None
+            
+            # Encontrar el índice de la columna SECCION
+            for idx, cell in enumerate(ws[header_row], 1):
+                if cell.value and str(cell.value).strip().upper() in ["SECCIÓN", "SECCION"]:
+                    seccion_col_idx = idx
+                    break
+            
+            if seccion_col_idx:
+                # Iterar sobre las filas de datos
+                for row in ws.iter_rows(min_row=header_row + 1):
+                    seccion_cell = row[seccion_col_idx - 1]
+                    if seccion_cell.value:
+                        seccion_val = str(seccion_cell.value).strip()
+                        # Obtener el color de fondo
+                        if seccion_cell.fill and seccion_cell.fill.fgColor:
+                            if seccion_cell.fill.fgColor.rgb:
+                                color = seccion_cell.fill.fgColor.rgb
+                                if len(color) == 8:  # Formato AARRGGBB
+                                    # Convertir a formato hex sin alpha
+                                    color_hex = f"#{color[2:]}"
+                                    colores_seccion[seccion_val] = color_hex
+            
+            # Procesar el dataframe
             df = df[pd.to_numeric(df["seccion"], errors="coerce").notna()].copy()
             df["seccion"] = df["seccion"].astype(float).astype(int).astype(str).str.zfill(4)
             df["participacion"] = pd.to_numeric(df["participacion"], errors="coerce")
             df["inicial"] = pd.to_numeric(df["inicial"], errors="coerce").round(0).astype("Int64")
             df["meta"] = pd.to_numeric(df["meta"], errors="coerce").round(0).astype("Int64")
+            
+            # Agregar colores al dataframe
+            df['color'] = df['seccion'].map(colores_seccion)
+            
             return df.set_index("seccion")
         except Exception as e:
-            st.error(f"Error cargando datos de sección: {str(e)}")
+            st.error(f"Error cargando datos de sección con colores: {str(e)}")
             return pd.DataFrame()
 
     @staticmethod
@@ -403,6 +507,50 @@ class DataManager:
             return pd.DataFrame()
 
     @staticmethod
+    @st.cache_data(ttl=3600)
+    def get_operadores_data():
+        """Obtiene datos de operadores desde la base de datos"""
+        try:
+            connection = pymysql.connect(
+                host='sql3.freesqldatabase.com',
+                user='sql3817481',
+                password='398j6uKWle',
+                database='sql3817481',
+                port=3306
+            )
+            query = """
+            SELECT
+            id,
+            nombre,
+            apellido_paterno,
+            apellido_materno,
+            sexo,
+            fecha_nacimiento,
+            curp,
+            clave_elector,
+            domicilio,
+            telefono,
+            anio_registro,
+            vigencia,
+            LPAD(CAST(seccion AS CHAR),4,'0') as seccion,
+            usuario_nombre,
+            usuario_pin
+            FROM ine
+            """
+            df = pd.read_sql(query, connection)
+            connection.close()
+            
+            # Procesar datos
+            df['seccion'] = df['seccion'].astype(str).str.zfill(4)
+            df['nombre_completo'] = df['nombre'] + ' ' + df['apellido_paterno'] + ' ' + df['apellido_materno']
+            df['edad'] = pd.to_datetime('today').year - pd.to_datetime(df['fecha_nacimiento'], dayfirst=True).dt.year
+            
+            return df
+        except Exception as e:
+            st.error(f"Error obteniendo datos de operadores: {str(e)}")
+            return pd.DataFrame()
+
+    @staticmethod
     @st.cache_data(ttl=86400)
     def load_geojson():
         try:
@@ -419,6 +567,99 @@ class DataManager:
             return []
 
 # ---------------------------------------------------
+# ANALIZADOR DE OPERADORES
+# ---------------------------------------------------
+class OperadoresAnalytics:
+    def __init__(self, operadores_df):
+        self.operadores = operadores_df
+        
+    def get_resumen_operadores(self):
+        """Genera resumen estadístico por operador"""
+        if self.operadores.empty:
+            return pd.DataFrame()
+        
+        # Agrupar por usuario_nombre
+        resumen = self.operadores.groupby('usuario_nombre').agg({
+            'id': 'count',
+            'seccion': lambda x: x.nunique(),
+            'sexo': lambda x: x.value_counts().to_dict() if len(x) > 0 else {},
+            'edad': ['mean', 'min', 'max'],
+            'anio_registro': lambda x: x.mode()[0] if len(x.mode()) > 0 else None
+        }).round(1)
+        
+        # Renombrar columnas
+        resumen.columns = ['total_registros', 'secciones_asignadas', 'distribucion_sexo', 
+                          'edad_promedio', 'edad_min', 'edad_max', 'anio_registro_comun']
+        
+        # Calcular eficiencia (simulada - basada en registros vs secciones)
+        resumen['indice_productividad'] = (resumen['total_registros'] / resumen['secciones_asignadas']).round(1)
+        
+        return resumen.reset_index()
+    
+    def get_operador_detalle(self, operador_nombre):
+        """Obtiene detalle completo de un operador específico"""
+        if self.operadores.empty:
+            return pd.DataFrame()
+        
+        detalle = self.operadores[self.operadores['usuario_nombre'] == operador_nombre].copy()
+        return detalle
+    
+    def get_top_operadores(self, n=5):
+        """Obtiene los operadores con más registros"""
+        resumen = self.get_resumen_operadores()
+        if resumen.empty:
+            return pd.DataFrame()
+        return resumen.nlargest(n, 'total_registros')
+    
+    def create_operador_charts(self):
+        """Crea visualizaciones para operadores"""
+        charts = {}
+        resumen = self.get_resumen_operadores()
+        
+        if resumen.empty:
+            return charts
+        
+        # Gráfico de barras - Top operadores
+        fig1 = px.bar(
+            resumen.nlargest(10, 'total_registros'),
+            x='usuario_nombre',
+            y='total_registros',
+            title='Top 10 Operadores por Registros',
+            labels={'usuario_nombre': 'Operador', 'total_registros': 'Registros'},
+            color='total_registros',
+            color_continuous_scale=['#667eea', '#764ba2']
+        )
+        fig1.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Inter"),
+            xaxis_tickangle=-45
+        )
+        charts['top_operadores'] = fig1
+        
+        # Gráfico de distribución de edades por operador
+        fig2 = go.Figure()
+        for operador in resumen['usuario_nombre'].head(5):
+            datos_operador = self.operadores[self.operadores['usuario_nombre'] == operador]
+            fig2.add_trace(go.Box(
+                y=datos_operador['edad'],
+                name=operador,
+                marker_color='#667eea'
+            ))
+        
+        fig2.update_layout(
+            title='Distribución de Edades por Operador (Top 5)',
+            yaxis_title='Edad',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family="Inter"),
+            showlegend=True
+        )
+        charts['edad_distribution'] = fig2
+        
+        return charts
+
+# ---------------------------------------------------
 # ANALIZADOR DE DATOS AVANZADO
 # ---------------------------------------------------
 class AdvancedAnalytics:
@@ -430,11 +671,19 @@ class AdvancedAnalytics:
         
     def generate_executive_summary(self):
         """Genera un resumen ejecutivo de alto nivel"""
+        # Calcular avance real usando simpatizantes vs meta
+        df_combinado = self.datos_seccion.reset_index().merge(
+            self.simpatizantes_por_seccion, on='seccion', how='left'
+        ).fillna(0)
+        
+        total_meta = df_combinado['meta'].sum()
+        total_simpatizantes = df_combinado['simpatizantes'].sum()
+        
         summary = {
-            'total_simpatizantes': int(self.simpatizantes_por_seccion['simpatizantes'].sum()),
+            'total_simpatizantes': int(total_simpatizantes),
             'secciones_activas': len(self.simpatizantes_por_seccion),
-            'cobertura': f"{(len(self.simpatizantes_por_seccion) / 200 * 100):.1f}%",  # Asumiendo 200 secciones
-            'promedio_x_seccion': int(self.simpatizantes_por_seccion['simpatizantes'].mean()),
+            'cobertura': f"{(len(self.simpatizantes_por_seccion) / len(self.datos_seccion) * 100):.1f}%" if len(self.datos_seccion) > 0 else "0%",
+            'promedio_x_seccion': int(self.simpatizantes_por_seccion['simpatizantes'].mean()) if len(self.simpatizantes_por_seccion) > 0 else 0,
             'eficiencia_global': self.calculate_global_efficiency(),
             'top_performers': self.identify_top_performers(5),
             'areas_oportunidad': self.identify_opportunity_areas(5),
@@ -443,38 +692,62 @@ class AdvancedAnalytics:
         return summary
     
     def calculate_global_efficiency(self):
+        """Calcula la eficiencia global usando simpatizantes vs meta"""
         if len(self.datos_seccion) == 0:
             return 0
-        total_inicial = self.datos_seccion['inicial'].sum()
-        total_meta = self.datos_seccion['meta'].sum()
-        return round((total_inicial / total_meta * 100), 1) if total_meta > 0 else 0
+        
+        df_combinado = self.datos_seccion.reset_index().merge(
+            self.simpatizantes_por_seccion, on='seccion', how='left'
+        ).fillna(0)
+        
+        total_meta = df_combinado['meta'].sum()
+        total_simpatizantes = df_combinado['simpatizantes'].sum()
+        
+        return round((total_simpatizantes / total_meta * 100), 1) if total_meta > 0 else 0
     
     def identify_top_performers(self, n):
+        """Identifica las secciones con mejor desempeño basado en avance real"""
         if len(self.datos_seccion) == 0:
             return []
-        df = self.datos_seccion.reset_index().copy()
-        df['cumplimiento'] = (df['inicial'] / df['meta'] * 100).round(1)
+        
+        df = self.datos_seccion.reset_index().merge(
+            self.simpatizantes_por_seccion, on='seccion', how='left'
+        ).fillna(0)
+        
+        df['cumplimiento'] = (df['simpatizantes'] / df['meta'] * 100).round(1)
         df = df[df['meta'] > 0].nlargest(n, 'cumplimiento')
         return df[['seccion', 'cumplimiento']].to_dict('records')
     
     def identify_opportunity_areas(self, n):
+        """Identifica las áreas de oportunidad basado en avance real"""
         if len(self.datos_seccion) == 0:
             return []
-        df = self.datos_seccion.reset_index().copy()
-        df['cumplimiento'] = (df['inicial'] / df['meta'] * 100).round(1)
+        
+        df = self.datos_seccion.reset_index().merge(
+            self.simpatizantes_por_seccion, on='seccion', how='left'
+        ).fillna(0)
+        
+        df['cumplimiento'] = (df['simpatizantes'] / df['meta'] * 100).round(1)
         df = df[df['meta'] > 0].nsmallest(n, 'cumplimiento')
         return df[['seccion', 'cumplimiento']].to_dict('records')
     
     def calculate_projection(self):
+        """Calcula la proyección de meta basado en simpatizantes actuales"""
         if len(self.datos_seccion) == 0:
             return {}
-        total_inicial = self.datos_seccion['inicial'].sum()
-        total_meta = self.datos_seccion['meta'].sum()
-        restante = total_meta - total_inicial
+        
+        df_combinado = self.datos_seccion.reset_index().merge(
+            self.simpatizantes_por_seccion, on='seccion', how='left'
+        ).fillna(0)
+        
+        total_meta = df_combinado['meta'].sum()
+        total_simpatizantes = df_combinado['simpatizantes'].sum()
+        restante = total_meta - total_simpatizantes
+        
         return {
-            'logrado': int(total_inicial),
-            'pendiente': int(restante),
-            'porcentaje': round((total_inicial / total_meta * 100), 1) if total_meta > 0 else 0
+            'logrado': int(total_simpatizantes),
+            'pendiente': int(max(0, restante)),
+            'porcentaje': round((total_simpatizantes / total_meta * 100), 1) if total_meta > 0 else 0
         }
     
     def generate_trend_analysis(self):
@@ -491,11 +764,11 @@ class AdvancedAnalytics:
                 correlation = df['simpatizantes'].corr(df['meta'])
                 analysis['correlation_simpatizantes_meta'] = round(correlation, 3)
                 
-                # Análisis de distribución
+                # Análisis de distribución de simpatizantes
                 analysis['skewness'] = round(df['simpatizantes'].skew(), 3)
                 analysis['kurtosis'] = round(df['simpatizantes'].kurtosis(), 3)
                 
-                # Percentiles
+                # Percentiles de simpatizantes
                 analysis['percentiles'] = {
                     'p25': int(df['simpatizantes'].quantile(0.25)),
                     'p50': int(df['simpatizantes'].quantile(0.5)),
@@ -558,12 +831,12 @@ class AdvancedAnalytics:
         )
         charts['top20'] = fig2
         
-        # 3. Matriz de desempeño (si hay datos de meta)
+        # 3. Matriz de desempeño (simpatizantes vs meta)
         if len(self.datos_seccion) > 0:
             df_matrix = self.datos_seccion.reset_index().merge(
                 self.simpatizantes_por_seccion, on='seccion', how='inner'
             )
-            df_matrix['eficiencia'] = (df_matrix['inicial'] / df_matrix['meta'] * 100).round(1)
+            df_matrix['eficiencia'] = (df_matrix['simpatizantes'] / df_matrix['meta'] * 100).round(1)
             df_matrix = df_matrix[df_matrix['meta'] > 0]
             
             fig3 = px.scatter(
@@ -596,9 +869,13 @@ class AdvancedAnalytics:
 # ---------------------------------------------------
 class ProfessionalMapViewer:
     @staticmethod
-    def create_map(features, colonias, db, filtro, datos_seccion, simpatizantes_colonia):
+    def create_map(features, colonias, db, filtro, datos_seccion_con_colores, simpatizantes_colonia):
         centro = [22.7709, -102.5832]
         zoom = 13
+        
+        # Calcular simpatizantes por sección
+        simpatizantes_por_seccion = db.groupby('seccion')['simpatizantes'].sum().reset_index()
+        simpatizantes_dict = dict(zip(simpatizantes_por_seccion['seccion'], simpatizantes_por_seccion['simpatizantes']))
         
         # Estilo de mapa profesional
         m = folium.Map(
@@ -607,11 +884,6 @@ class ProfessionalMapViewer:
             tiles='CartoDB positron',
             control_scale=True
         )
-        
-        # Agregar capa de calor si hay suficientes datos
-        if len(db) > 10:
-            heat_data = [[row['lat'], row['lon']] for row in db.to_dict('records')]
-            # Nota: Requiere folium.plugins.HeatMap
         
         secciones = {}
         for feature in features:
@@ -622,23 +894,18 @@ class ProfessionalMapViewer:
             if filtro and seccion != filtro:
                 continue
             
-            datos = db[db.seccion == seccion]
-            total = int(datos.simpatizantes.sum()) if len(datos) > 0 else 0
+            total_simpatizantes = int(simpatizantes_dict.get(seccion, 0))
             
-            # Determinar color basado en cuartiles
-            if total == 0:
-                color = '#f1f5f9'
-            elif total <= 2:
-                color = '#fed7aa'  # Naranja claro
-            elif total <= 5:
-                color = '#fdba74'  # Naranja medio
-            elif total <= 10:
-                color = '#fb923c'  # Naranja fuerte
+            # Obtener color del Excel si existe
+            if seccion in datos_seccion_con_colores.index:
+                color_excel = datos_seccion_con_colores.loc[seccion, 'color']
+                color = color_excel if pd.notna(color_excel) else '#94a3b8'
             else:
-                color = '#f97316'  # Naranja intenso
+                # Color por defecto gris
+                color = '#94a3b8'
             
             # Preparar contenido del popup
-            cps = datos.cp.dropna().unique()
+            cps = db[db.seccion == seccion].cp.dropna().unique()
             cp_html = "<br>".join(cps) if len(cps) > 0 else "No disponible"
             
             cols = colonias.get(seccion, [])
@@ -651,17 +918,20 @@ class ProfessionalMapViewer:
             for _, row in detalle.nlargest(5, 'simpatizantes').iterrows():
                 detalle_html += f"• {row['colonia']}: {int(row['simpatizantes'])}<br>"
             
-            if seccion in datos_seccion.index:
-                d = datos_seccion.loc[seccion]
+            if seccion in datos_seccion_con_colores.index:
+                d = datos_seccion_con_colores.loc[seccion]
                 participacion = f"{int(d['participacion']*100)}%" if pd.notna(d['participacion']) else "N/D"
                 inicial = str(int(d['inicial'])) if pd.notna(d['inicial']) else "N/D"
                 meta = str(int(d['meta'])) if pd.notna(d['meta']) else "N/D"
                 
-                if d['meta'] > 0 and pd.notna(d['inicial']):
-                    avance = int((d['inicial'] / d['meta'] * 100))
+                # Calcular avance real con simpatizantes
+                if d['meta'] > 0 and pd.notna(d['meta']):
+                    avance = int((total_simpatizantes / d['meta'] * 100))
+                    avance_color = '#10b981' if avance >= 80 else '#f59e0b' if avance >= 50 else '#ef4444'
+                    
                     progress_bar = f"""
                     <div style="background: #e2e8f0; border-radius: 10px; margin: 10px 0;">
-                        <div style="background: linear-gradient(90deg, #667eea, #764ba2); width: {avance}%; height: 8px; border-radius: 10px;"></div>
+                        <div style="background: {avance_color}; width: {avance}%; height: 8px; border-radius: 10px;"></div>
                     </div>
                     <p style="text-align: right; font-size: 0.9rem; color: #64748b;">{avance}% de meta</p>
                     """
@@ -674,13 +944,22 @@ class ProfessionalMapViewer:
                         <div><span style="color: #64748b;">Participación</span><br><strong>{participacion}</strong></div>
                         <div><span style="color: #64748b;">Inicial</span><br><strong>{inicial}</strong></div>
                         <div><span style="color: #64748b;">Meta</span><br><strong>{meta}</strong></div>
-                        <div><span style="color: #64748b;">Simpatizantes</span><br><strong>{total}</strong></div>
+                        <div><span style="color: #64748b;">Simpatizantes</span><br><strong>{total_simpatizantes}</strong></div>
                     </div>
                     {progress_bar}
                 </div>
                 """
             else:
-                stats_html = ""
+                stats_html = f"""
+                <div style="background: #f8fafc; border-radius: 12px; padding: 12px; margin: 10px 0;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div><span style="color: #64748b;">Participación</span><br><strong>N/D</strong></div>
+                        <div><span style="color: #64748b;">Inicial</span><br><strong>N/D</strong></div>
+                        <div><span style="color: #64748b;">Meta</span><br><strong>N/D</strong></div>
+                        <div><span style="color: #64748b;">Simpatizantes</span><br><strong>{total_simpatizantes}</strong></div>
+                    </div>
+                </div>
+                """
             
             popup_html = f"""
             <div style="font-family: 'Inter', sans-serif; min-width: 280px;">
@@ -708,9 +987,9 @@ class ProfessionalMapViewer:
                         "fillColor": color,
                         "color": "#475569",
                         "weight": 1.5,
-                        "fillOpacity": 0.6
+                        "fillOpacity": 0.7
                     },
-                    tooltip=folium.Tooltip(f"Sección {seccion} · {total} simpatizantes"),
+                    tooltip=folium.Tooltip(f"Sección {seccion} · {total_simpatizantes} simpatizantes"),
                     popup=folium.Popup(popup_html, max_width=350)
                 ).add_to(m)
             
@@ -722,26 +1001,54 @@ class ProfessionalMapViewer:
                 lat = sum(p[1] for p in coords) / len(coords)
                 lon = sum(p[0] for p in coords) / len(coords)
                 
-                if total > 0:
+                if total_simpatizantes > 0:
+                    # Calcular color del marcador basado en avance
+                    if seccion in datos_seccion_con_colores.index:
+                        d = datos_seccion_con_colores.loc[seccion]
+                        if d['meta'] > 0:
+                            avance = (total_simpatizantes / d['meta']) * 100
+                            if avance >= 80:
+                                marker_color = '#10b981'
+                            elif avance >= 50:
+                                marker_color = '#f59e0b'
+                            else:
+                                marker_color = '#ef4444'
+                        else:
+                            marker_color = '#94a3b8'
+                    else:
+                        marker_color = '#94a3b8'
+                    
                     folium.Marker(
                         [lat, lon],
                         icon=folium.DivIcon(
                             html=f"""
                             <div style="
-                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                background: {marker_color};
                                 color: white;
                                 padding: 8px 12px;
                                 border-radius: 30px;
                                 font-weight: 700;
                                 font-size: 14px;
-                                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+                                box-shadow: 0 4px 15px rgba(0,0,0,0.2);
                                 border: 2px solid white;
-                            ">{total}</div>
+                            ">{total_simpatizantes}</div>
                             """
                         )
                     ).add_to(m)
             except:
                 pass
+        
+        # Agregar leyenda de colores
+        legend_html = '''
+        <div style="position: fixed; bottom: 50px; right: 50px; z-index: 1000; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border: 1px solid #e2e8f0;">
+            <p style="font-weight: 700; margin: 0 0 10px 0; color: #1e293b;">Leyenda de Colores</p>
+            <p style="margin: 5px 0;"><span style="display: inline-block; width: 20px; height: 20px; background: #10b981; margin-right: 10px; border-radius: 4px;"></span> Alto desempeño (≥80%)</p>
+            <p style="margin: 5px 0;"><span style="display: inline-block; width: 20px; height: 20px; background: #f59e0b; margin-right: 10px; border-radius: 4px;"></span> Desempeño medio (50-79%)</p>
+            <p style="margin: 5px 0;"><span style="display: inline-block; width: 20px; height: 20px; background: #ef4444; margin-right: 10px; border-radius: 4px;"></span> Bajo desempeño (<50%)</p>
+            <p style="margin: 5px 0;"><span style="display: inline-block; width: 20px; height: 20px; background: #94a3b8; margin-right: 10px; border-radius: 4px;"></span> Sin datos de meta</p>
+        </div>
+        '''
+        m.get_root().html.add_child(folium.Element(legend_html))
         
         # Agregar control de capas
         folium.LayerControl().add_to(m)
@@ -806,10 +1113,12 @@ def main():
         colonias = DataManager.load_excel()
         geo = DataManager.load_geojson()
         simpatizantes_colonia = DataManager.get_simpatizantes_colonia()
-        datos_seccion = DataManager.load_datos_seccion()
+        datos_seccion_con_colores = DataManager.load_datos_seccion_con_colores()
+        operadores_df = DataManager.get_operadores_data()
     
     # Inicializar analítica avanzada
-    analytics = AdvancedAnalytics(db, datos_seccion, simpatizantes_colonia)
+    analytics = AdvancedAnalytics(db, datos_seccion_con_colores, simpatizantes_colonia)
+    operadores_analytics = OperadoresAnalytics(operadores_df)
     executive_summary = analytics.generate_executive_summary()
     
     # Métricas clave
@@ -882,150 +1191,319 @@ def main():
     # Aplicar filtro
     filtro = None
     if search_term:
-        search_term = search_term.strip().zfill(4) if search_term.isdigit() else search_term
-        if search_term in db['seccion'].values:
-            filtro = search_term
-            st.success(f"Sección {search_term} encontrada")
+        search_term_clean = search_term.strip().zfill(4) if search_term.strip().isdigit() else search_term.strip()
+        if search_term_clean in db['seccion'].values:
+            filtro = search_term_clean
+            st.success(f"Sección {search_term_clean} encontrada")
         else:
             st.warning(f"No se encontró: '{search_term}'")
     
-    # Mapa profesional
-    st.markdown("### 🗺️ Visualización Geoestratégica")
-    
-    mapa = ProfessionalMapViewer.create_map(
-        geo, colonias, db, filtro, 
-        datos_seccion, simpatizantes_colonia
-    )
-    folium_static(mapa, width=1600, height=650)
-    
-    st.markdown('<div class="divider-premium"></div>', unsafe_allow_html=True)
-    
-    # Dashboard analítico
-    st.markdown("### 📊 Centro de Análisis Electoral")
-    
-    tabs = st.tabs([
-        "📈 Distribución y Tendencias",
-        "🎯 Desempeño por Sección",
-        "🏆 Rankings y Comparativas",
+    # Tabs principales
+    main_tabs = st.tabs([
+        "🗺️ Visualización Geoestratégica",
+        "👥 Análisis por Operadores",
+        "📊 Centro de Análisis Electoral",
         "📋 Datos Maestros"
     ])
     
-    charts = analytics.create_dashboard_charts()
-    trend_analysis = analytics.generate_trend_analysis()
-    
-    with tabs[0]:
-        col1, col2 = st.columns(2)
+    with main_tabs[0]:
+        # Mapa profesional con colores del Excel
+        st.markdown("### 🗺️ Visualización Geoestratégica")
+        st.markdown("Los colores de las secciones corresponden a los colores del archivo DATOS_POR_SECCION.xlsx")
         
-        with col1:
-            if 'distribution' in charts:
-                st.plotly_chart(charts['distribution'], use_container_width=True)
-            
-            # Estadísticas de tendencia
-            st.markdown("#### Análisis de Tendencia")
-            col_t1, col_t2, col_t3 = st.columns(3)
-            with col_t1:
-                st.metric("Sesgo", trend_analysis.get('skewness', 'N/A'))
-            with col_t2:
-                st.metric("Curtosis", trend_analysis.get('kurtosis', 'N/A'))
-            with col_t3:
-                st.metric("Correlación", trend_analysis.get('correlation_simpatizantes_meta', 'N/A'))
-        
-        with col2:
-            if 'performance_matrix' in charts:
-                st.plotly_chart(charts['performance_matrix'], use_container_width=True)
-            
-            # Percentiles
-            if 'percentiles' in trend_analysis:
-                st.markdown("#### Distribución por Percentiles")
-                percentiles = trend_analysis['percentiles']
-                col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-                col_p1.metric("P25", percentiles['p25'])
-                col_p2.metric("P50", percentiles['p50'])
-                col_p3.metric("P75", percentiles['p75'])
-                col_p4.metric("P90", percentiles['p90'])
+        mapa = ProfessionalMapViewer.create_map(
+            geo, colonias, db, filtro, 
+            datos_seccion_con_colores, simpatizantes_colonia
+        )
+        folium_static(mapa, width=1600, height=650)
     
-    with tabs[1]:
-        if len(datos_seccion) > 0:
-            df_desempeno = datos_seccion.reset_index().copy()
-            df_desempeno['avance'] = (df_desempeno['inicial'] / df_desempeno['meta'] * 100).round(1)
-            df_desempeno = df_desempeno.merge(
-                analytics.simpatizantes_por_seccion, on='seccion', how='left'
-            ).fillna(0)
-            
-            # Selector de métrica
-            metrica = st.selectbox(
-                "Selecciona métrica de visualización",
-                ["avance", "simpatizantes", "inicial", "meta"],
-                format_func=lambda x: {
-                    'avance': '% de Avance',
-                    'simpatizantes': 'Simpatizantes',
-                    'inicial': 'Inicial',
-                    'meta': 'Meta'
-                }[x]
-            )
-            
-            fig_desempeno = px.bar(
-                df_desempeno.nlargest(20, metrica),
-                x='seccion',
-                y=metrica,
-                title=f"Top 20 Secciones por {metrica}",
-                color=metrica,
-                color_continuous_scale='Viridis'
-            )
-            st.plotly_chart(fig_desempeno, use_container_width=True)
-    
-    with tabs[2]:
-        col_r1, col_r2 = st.columns(2)
+    with main_tabs[1]:
+        st.markdown("### 👥 Análisis de Desempeño por Operadores")
         
-        with col_r1:
-            st.markdown("#### 🏆 Top Performers")
-            for i, perf in enumerate(executive_summary['top_performers'], 1):
+        if not operadores_df.empty:
+            # Resumen de operadores
+            resumen_operadores = operadores_analytics.get_resumen_operadores()
+            
+            # Métricas de operadores
+            col_op1, col_op2, col_op3, col_op4 = st.columns(4)
+            
+            with col_op1:
                 st.markdown(f"""
-                <div style="background: #f8fafc; padding: 1rem; border-radius: 12px; margin: 0.5rem 0;">
-                    <div style="display: flex; justify-content: space-between;">
-                        <span style="font-weight: 600;">#{i} Sección {perf['seccion']}</span>
-                        <span style="color: #10b981; font-weight: 700;">{perf['cumplimiento']}%</span>
-                    </div>
+                <div class="metric-card-premium">
+                    <div class="metric-label">Total Operadores</div>
+                    <div class="metric-value">{len(resumen_operadores)}</div>
                 </div>
                 """, unsafe_allow_html=True)
-        
-        with col_r2:
-            st.markdown("#### 📉 Áreas de Oportunidad")
-            for i, opp in enumerate(executive_summary['areas_oportunidad'], 1):
+            
+            with col_op2:
+                total_registros = int(resumen_operadores['total_registros'].sum())
                 st.markdown(f"""
-                <div style="background: #f8fafc; padding: 1rem; border-radius: 12px; margin: 0.5rem 0;">
-                    <div style="display: flex; justify-content: space-between;">
-                        <span style="font-weight: 600;">#{i} Sección {opp['seccion']}</span>
-                        <span style="color: #ef4444; font-weight: 700;">{opp['cumplimiento']}%</span>
-                    </div>
+                <div class="metric-card-premium">
+                    <div class="metric-label">Total Registros</div>
+                    <div class="metric-value">{total_registros:,}</div>
                 </div>
                 """, unsafe_allow_html=True)
+            
+            with col_op3:
+                promedio_registros = int(resumen_operadores['total_registros'].mean())
+                st.markdown(f"""
+                <div class="metric-card-premium">
+                    <div class="metric-label">Promedio x Operador</div>
+                    <div class="metric-value">{promedio_registros}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_op4:
+                mejor_operador = resumen_operadores.nlargest(1, 'total_registros').iloc[0]
+                st.markdown(f"""
+                <div class="metric-card-premium">
+                    <div class="metric-label">Mejor Operador</div>
+                    <div class="metric-value" style="font-size: 1.5rem;">{mejor_operador['usuario_nombre']}</div>
+                    <div class="metric-trend">{int(mejor_operador['total_registros'])} registros</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown('<div class="divider-premium"></div>', unsafe_allow_html=True)
+            
+            # Gráficos de operadores
+            col_op_chart1, col_op_chart2 = st.columns(2)
+            
+            with col_op_chart1:
+                operador_charts = operadores_analytics.create_operador_charts()
+                if 'top_operadores' in operador_charts:
+                    st.plotly_chart(operador_charts['top_operadores'], use_container_width=True)
+            
+            with col_op_chart2:
+                if 'edad_distribution' in operador_charts:
+                    st.plotly_chart(operador_charts['edad_distribution'], use_container_width=True)
+            
+            st.markdown('<div class="divider-premium"></div>', unsafe_allow_html=True)
+            
+            # Tabla de desempeño por operador
+            st.markdown("#### 📊 Tabla de Desempeño por Operador")
+            
+            # Selector de operador
+            operadores_list = ['Todos'] + list(resumen_operadores['usuario_nombre'].unique())
+            operador_seleccionado = st.selectbox("Filtrar por operador:", operadores_list, key="operador_select")
+            
+            if operador_seleccionado == 'Todos':
+                df_mostrar = resumen_operadores.copy()
+            else:
+                df_mostrar = resumen_operadores[resumen_operadores['usuario_nombre'] == operador_seleccionado].copy()
+            
+            # Formatear columnas para mostrar
+            df_mostrar['edad_promedio'] = df_mostrar['edad_promedio'].round(1)
+            
+            st.dataframe(
+                df_mostrar,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'usuario_nombre': st.column_config.TextColumn('Operador'),
+                    'total_registros': st.column_config.NumberColumn('Registros', format="%d"),
+                    'secciones_asignadas': st.column_config.NumberColumn('Secciones', format="%d"),
+                    'edad_promedio': st.column_config.NumberColumn('Edad Prom.', format="%.1f"),
+                    'edad_min': st.column_config.NumberColumn('Edad Mín', format="%d"),
+                    'edad_max': st.column_config.NumberColumn('Edad Máx', format="%d"),
+                    'indice_productividad': st.column_config.NumberColumn('Productividad', format="%.1f"),
+                    'anio_registro_comun': st.column_config.NumberColumn('Año común', format="%d")
+                }
+            )
+            
+            st.markdown('<div class="divider-premium"></div>', unsafe_allow_html=True)
+            
+            # Detalle de operador específico
+            st.markdown("#### 🔍 Detalle por Operador")
+            
+            operador_detalle = st.selectbox(
+                "Selecciona operador para ver detalle:",
+                resumen_operadores['usuario_nombre'].unique(),
+                key="operador_detalle"
+            )
+            
+            if operador_detalle:
+                detalle = operadores_analytics.get_operador_detalle(operador_detalle)
+                
+                # Estadísticas rápidas
+                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                
+                with col_d1:
+                    st.metric("Registros", len(detalle))
+                with col_d2:
+                    st.metric("Secciones", detalle['seccion'].nunique())
+                with col_d3:
+                    st.metric("Edad Promedio", f"{detalle['edad'].mean():.1f}")
+                with col_d4:
+                    st.metric("Hombres/Mujeres", f"{len(detalle[detalle['sexo']=='H'])}/{len(detalle[detalle['sexo']=='M'])}")
+                
+                # Mostrar tabla de registros
+                st.dataframe(
+                    detalle[['nombre_completo', 'seccion', 'edad', 'sexo', 'anio_registro', 'vigencia']],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'nombre_completo': 'Nombre',
+                        'seccion': 'Sección',
+                        'edad': 'Edad',
+                        'sexo': 'Sexo',
+                        'anio_registro': 'Año Registro',
+                        'vigencia': 'Vigencia'
+                    }
+                )
+        else:
+            st.warning("No hay datos de operadores disponibles")
     
-    with tabs[3]:
+    with main_tabs[2]:
+        st.markdown("### 📊 Centro de Análisis Electoral")
+        
+        tabs_analisis = st.tabs([
+            "📈 Distribución y Tendencias",
+            "🎯 Desempeño por Sección",
+            "🏆 Rankings y Comparativas"
+        ])
+        
+        charts = analytics.create_dashboard_charts()
+        trend_analysis = analytics.generate_trend_analysis()
+        
+        with tabs_analisis[0]:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if 'distribution' in charts:
+                    st.plotly_chart(charts['distribution'], use_container_width=True)
+                
+                # Estadísticas de tendencia
+                st.markdown("#### Análisis de Tendencia")
+                col_t1, col_t2, col_t3 = st.columns(3)
+                with col_t1:
+                    st.metric("Sesgo", trend_analysis.get('skewness', 'N/A'))
+                with col_t2:
+                    st.metric("Curtosis", trend_analysis.get('kurtosis', 'N/A'))
+                with col_t3:
+                    st.metric("Correlación", trend_analysis.get('correlation_simpatizantes_meta', 'N/A'))
+            
+            with col2:
+                if 'performance_matrix' in charts:
+                    st.plotly_chart(charts['performance_matrix'], use_container_width=True)
+                
+                # Percentiles
+                if 'percentiles' in trend_analysis:
+                    st.markdown("#### Distribución por Percentiles")
+                    percentiles = trend_analysis['percentiles']
+                    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+                    col_p1.metric("P25", percentiles['p25'])
+                    col_p2.metric("P50", percentiles['p50'])
+                    col_p3.metric("P75", percentiles['p75'])
+                    col_p4.metric("P90", percentiles['p90'])
+        
+        with tabs_analisis[1]:
+            if len(datos_seccion_con_colores) > 0:
+                # Crear dataframe con avance real
+                df_desempeno = datos_seccion_con_colores.reset_index().copy()
+                simpatizantes_por_seccion = db.groupby('seccion')['simpatizantes'].sum().reset_index()
+                df_desempeno = df_desempeno.merge(
+                    simpatizantes_por_seccion, on='seccion', how='left'
+                ).fillna(0)
+                
+                df_desempeno['avance'] = (df_desempeno['simpatizantes'] / df_desempeno['meta'] * 100).round(1)
+                df_desempeno['faltantes'] = (df_desempeno['meta'] - df_desempeno['simpatizantes']).clip(lower=0)
+                
+                # Selector de métrica
+                metrica = st.selectbox(
+                    "Selecciona métrica de visualización",
+                    ["avance", "simpatizantes", "faltantes", "meta"],
+                    format_func=lambda x: {
+                        'avance': '% de Avance',
+                        'simpatizantes': 'Simpatizantes Actuales',
+                        'faltantes': 'Faltantes para Meta',
+                        'meta': 'Meta'
+                    }[x]
+                )
+                
+                fig_desempeno = px.bar(
+                    df_desempeno.nlargest(20, metrica if metrica != 'faltantes' else 'faltantes'),
+                    x='seccion',
+                    y=metrica,
+                    title=f"Top 20 Secciones por {metrica}",
+                    color=metrica,
+                    color_continuous_scale='Viridis'
+                )
+                st.plotly_chart(fig_desempeno, use_container_width=True)
+                
+                # Mostrar tabla de avance
+                st.markdown("#### 📊 Tabla de Avance por Sección")
+                st.dataframe(
+                    df_desempeno[['seccion', 'simpatizantes', 'meta', 'avance', 'faltantes']].sort_values('avance', ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'seccion': 'Sección',
+                        'simpatizantes': st.column_config.NumberColumn('Simpatizantes', format="%d"),
+                        'meta': st.column_config.NumberColumn('Meta', format="%d"),
+                        'avance': st.column_config.ProgressColumn(
+                            '% Avance',
+                            format="%.1f%%",
+                            min_value=0,
+                            max_value=100
+                        ),
+                        'faltantes': st.column_config.NumberColumn('Faltantes', format="%d")
+                    }
+                )
+        
+        with tabs_analisis[2]:
+            col_r1, col_r2 = st.columns(2)
+            
+            with col_r1:
+                st.markdown("#### 🏆 Top Performers")
+                for i, perf in enumerate(executive_summary['top_performers'], 1):
+                    st.markdown(f"""
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 12px; margin: 0.5rem 0;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="font-weight: 600;">#{i} Sección {perf['seccion']}</span>
+                            <span style="color: #10b981; font-weight: 700;">{perf['cumplimiento']}%</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            with col_r2:
+                st.markdown("#### 📉 Áreas de Oportunidad")
+                for i, opp in enumerate(executive_summary['areas_oportunidad'], 1):
+                    st.markdown(f"""
+                    <div style="background: #f8fafc; padding: 1rem; border-radius: 12px; margin: 0.5rem 0;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="font-weight: 600;">#{i} Sección {opp['seccion']}</span>
+                            <span style="color: #ef4444; font-weight: 700;">{opp['cumplimiento']}%</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+    
+    with main_tabs[3]:
         # Tabla maestra
-        st.markdown("#### Datos Maestros del Sistema")
+        st.markdown("#### 📋 Datos Maestros del Sistema")
         
         # Preparar datos
         simpatizantes_totales = db.groupby('seccion')['simpatizantes'].sum().reset_index()
         simpatizantes_totales.columns = ['seccion', 'simpatizantes']
         
         tabla_maestra = simpatizantes_totales.merge(
-            datos_seccion.reset_index(),
+            datos_seccion_con_colores.reset_index(),
             on='seccion',
             how='left'
         ).fillna(0)
         
         # Calcular métricas adicionales
         tabla_maestra['participacion_pct'] = (tabla_maestra['participacion'] * 100).round(1)
-        tabla_maestra['avance'] = (tabla_maestra['inicial'] / tabla_maestra['meta'] * 100).round(1)
+        tabla_maestra['avance'] = (tabla_maestra['simpatizantes'] / tabla_maestra['meta'] * 100).round(1)
         tabla_maestra['avance'] = tabla_maestra['avance'].fillna(0)
+        tabla_maestra['faltantes'] = (tabla_maestra['meta'] - tabla_maestra['simpatizantes']).clip(lower=0)
         
         # Renombrar columnas
         tabla_maestra.columns = [
             'Sección', 'Simpatizantes', 'Participación',
-            'Inicial', 'Meta', '% Participación', '% Avance'
+            'Inicial', 'Meta', 'Color Excel', '% Participación', '% Avance', 'Faltantes'
         ]
         
+        # Mostrar tabla con indicadores de color
         st.dataframe(
             tabla_maestra,
             use_container_width=True,
@@ -1035,15 +1513,34 @@ def main():
                 'Simpatizantes': st.column_config.NumberColumn('Simpatizantes', format="%d"),
                 'Inicial': st.column_config.NumberColumn('Inicial', format="%d"),
                 'Meta': st.column_config.NumberColumn('Meta', format="%d"),
+                'Color Excel': st.column_config.TextColumn('Color Excel'),
                 '% Participación': st.column_config.NumberColumn('% Participación', format="%.1f%%"),
                 '% Avance': st.column_config.ProgressColumn(
                     '% Avance',
                     format="%.1f%%",
                     min_value=0,
                     max_value=100
-                )
+                ),
+                'Faltantes': st.column_config.NumberColumn('Faltantes', format="%d")
             }
         )
+        
+        # Tabla de operadores
+        st.markdown("#### 👥 Datos de Operadores")
+        if not operadores_df.empty:
+            st.dataframe(
+                operadores_df[['usuario_nombre', 'nombre_completo', 'seccion', 'edad', 'sexo', 'anio_registro']].head(100),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'usuario_nombre': 'Operador',
+                    'nombre_completo': 'Nombre',
+                    'seccion': 'Sección',
+                    'edad': 'Edad',
+                    'sexo': 'Sexo',
+                    'anio_registro': 'Año Registro'
+                }
+            )
     
     st.markdown('<div class="divider-premium"></div>', unsafe_allow_html=True)
     
@@ -1055,7 +1552,7 @@ def main():
     with col_f2:
         st.markdown(f"**Secciones monitoreadas:** {executive_summary['secciones_activas']}")
     with col_f3:
-        st.markdown(f"**Eficiencia sistema:** {executive_summary['eficiencia_global']}%")
+        st.markdown(f"**Operadores activos:** {len(operadores_analytics.get_resumen_operadores()) if not operadores_df.empty else 0}")
     with col_f4:
         st.markdown("**v2.0 Enterprise · Todos los derechos reservados**")
 
