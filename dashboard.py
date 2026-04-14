@@ -469,7 +469,6 @@ class DataManager:
                 password='GTdwIZk7Y2',
                 database='sql5823189',
                 port=3306,
-                port=3306
             )
             query = """
             SELECT
