@@ -332,10 +332,10 @@ class DataManager:
     def get_ine_data():
         try:
             connection = pymysql.connect(
-                host='sql3.freesqldatabase.com',
-                user='sql3817481',
-                password='398j6uKWle',
-                database='sql3817481',
+                host='sql5.freesqldatabase.com',
+                user='sql5823189',
+                password='GTdwIZk7Y2',
+                database='sql5823189',
                 port=3306,
                 connect_timeout=5
             )
@@ -464,10 +464,11 @@ class DataManager:
     def get_simpatizantes_colonia():
         try:
             connection = pymysql.connect(
-                host='sql3.freesqldatabase.com',
-                user='sql3817481',
-                password='398j6uKWle',
-                database='sql3817481',
+                host='sql5.freesqldatabase.com',
+                user='sql5823189',
+                password='GTdwIZk7Y2',
+                database='sql5823189',
+                port=3306,
                 port=3306
             )
             query = """
@@ -512,11 +513,11 @@ class DataManager:
         """Obtiene datos de operadores desde la base de datos"""
         try:
             connection = pymysql.connect(
-                host='sql3.freesqldatabase.com',
-                user='sql3817481',
-                password='398j6uKWle',
-                database='sql3817481',
-                port=3306
+                host='sql5.freesqldatabase.com',
+                user='sql5823189',
+                password='GTdwIZk7Y2',
+                database='sql5823189',
+                port=3306,
             )
             query = """
             SELECT
