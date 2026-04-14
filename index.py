@@ -250,11 +250,11 @@ st.markdown('<div class="decorative-line"></div>', unsafe_allow_html=True)
 @st.cache_data
 def get_ine_data():
     connection = pymysql.connect(
-        host='sql3.freesqldatabase.com',
-        user='sql3817481',
-        password='398j6uKWle',
-        database='sql3817481',
-        port=3306
+       host='sql5.freesqldatabase.com',
+                user='sql5823189',
+                password='GTdwIZk7Y2',
+                database='sql5823189',
+                port=3306
     )
     query = """
     SELECT
@@ -308,11 +308,11 @@ def load_excel():
 @st.cache_data
 def get_simpatizantes_colonia():
     connection = pymysql.connect(
-        host='sql3.freesqldatabase.com',
-        user='sql3817481',
-        password='398j6uKWle',
-        database='sql3817481',
-        port=3306
+        host='sql5.freesqldatabase.com',
+                user='sql5823189',
+                password='GTdwIZk7Y2',
+                database='sql5823189',
+                port=3306
     )
     query = """
     SELECT
